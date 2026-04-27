@@ -1,9 +1,11 @@
-<!-- ============================================== -->
-<!-- 🎬 영화 MBTI 테스트 - 블로거 임베드 버전          -->
-<!-- 사용법: 블로거 새 글 → HTML 모드 → 아래 전체 복사 -->
-<!-- ============================================== -->
-
-<style>
+<!--==================== Part 1 Start ====================-->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>🎬 오늘 밤 볼 영화는? | 영화 MBTI 16유형 테스트</title>
+  <meta content="13가지 질문으로 나의 영화 취향 MBTI를 분석하고, 오늘 밤 OTT에서 볼 영화를 추천받아보세요!" name="description">
+  <style>
     /* === 블로거 충돌 방지 - #app 내부에 격리 === */
     #app * { box-sizing: border-box; }
 
@@ -699,8 +701,10 @@
       #app .opt-label { font-size: 0.88rem; }
     }
   </style>
+</head>
 <!--==================== Part 1 End ====================-->
 <!--==================== Part 2 Start ====================-->
+<body>
 <div id="app">
 
   <!-- Header -->
@@ -1835,24 +1839,65 @@ function calcResult() {
 //  TMDB API + 이미지 URL
 //  - API: Cloudflare Worker 프록시 사용
 //  - Image: image.tmdb.org 직접 사용 (Worker는 이미지 처리 안 함)
+//
+//  포스터 로딩 전략 (3단계):
+//  1차: 영문 제목으로 검색 (가장 정확)
+//  2차: 한글 제목으로 검색 (1차 실패 시)
+//  3차: 이모지 폴백 (모두 실패 시)
+//
+//  연도 매칭으로 동명이인 영화 자동 구별
 // ============================================================
 const TMDB_API  = 'https://tmdb-proxy.guijimo82.workers.dev/3';
 const TMDB_IMG  = 'https://image.tmdb.org/t/p';
 
-async function loadMoviePoster(tmdbId, imgElement, fallbackElement) {
+// 캐시: 같은 영화 중복 호출 방지
+const posterCache = new Map();
+
+async function searchMoviePoster(query, year, lang = 'en-US') {
+  const cacheKey = `${query}_${year}_${lang}`;
+  if (posterCache.has(cacheKey)) {
+    return posterCache.get(cacheKey);
+  }
+
   try {
-    const response = await fetch(`${TMDB_API}/movie/${tmdbId}?language=ko-KR`);
-    if (!response.ok) throw new Error('Proxy fetch failed');
+    const url = `${TMDB_API}/search/movie?query=${encodeURIComponent(query)}&year=${year}&language=${lang}`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
     const data = await response.json();
-    if (data.poster_path) {
-      // 이미지는 image.tmdb.org 직접 호출
-      imgElement.src = `${TMDB_IMG}/w500${data.poster_path}`;
-      imgElement.style.display = 'block';
-      fallbackElement.style.display = 'none';
+    if (data.results && data.results.length > 0) {
+      // 연도가 일치하는 첫 번째 결과 우선
+      const exactMatch = data.results.find(r => {
+        const releaseYear = r.release_date ? r.release_date.slice(0, 4) : '';
+        return releaseYear === String(year);
+      });
+      const best = exactMatch || data.results[0];
+      if (best.poster_path) {
+        posterCache.set(cacheKey, best.poster_path);
+        return best.poster_path;
+      }
     }
   } catch (e) {
-    // 실패 시 이모지 폴백 유지
-    console.log('Poster load failed for', tmdbId, e.message);
+    console.log(`Search failed (${lang}):`, query, e.message);
+  }
+  return null;
+}
+
+async function loadMoviePoster(movie, imgElement, fallbackElement) {
+  // 1차: 영문 제목으로 검색
+  let posterPath = await searchMoviePoster(movie.title_en, movie.year, 'en-US');
+
+  // 2차: 한글 제목으로 검색 (영문 검색 실패 시)
+  if (!posterPath) {
+    posterPath = await searchMoviePoster(movie.title, movie.year, 'ko-KR');
+  }
+
+  // 결과 적용
+  if (posterPath) {
+    imgElement.src = `${TMDB_IMG}/w500${posterPath}`;
+    imgElement.style.display = 'block';
+    fallbackElement.style.display = 'none';
+  } else {
+    console.log('No poster found for', movie.title);
   }
 }
 
@@ -2119,12 +2164,12 @@ function showResult(mbti, movies, relaxedFilters = []) {
   document.getElementById('result-screen').classList.remove('hidden');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 
-  // 포스터 비동기 로드
+  // 포스터 비동기 로드 (제목 검색 방식)
   movies.forEach(m => {
     const img = document.getElementById(`poster-${m.id}`);
     const emoji = document.getElementById(`emoji-${m.id}`);
     if (img && emoji) {
-      loadMoviePoster(m.tmdb_id, img, emoji);
+      loadMoviePoster(m, img, emoji);
     }
   });
 }
@@ -2212,4 +2257,6 @@ function retryTest() {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 </script>
+</body>
+</html>
 <!--==================== Part 4 End ====================-->
